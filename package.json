@@ -1,0 +1,18 @@
+{
+  "name": "vantix-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.17.0 <25" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "db:plan": "node scripts/migrate.js",
+    "db:migrate": "node scripts/migrate.js --apply"
+  },
+  "dependencies": {
+    "better-auth": "1.7.10",
+    "express": "5.3.0",
+    "mysql2": "3.24.6"
+  }
+}
