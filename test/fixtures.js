@@ -1,6 +1,7 @@
 export const configured = {
   BETTER_AUTH_URL: "https://vantix.example", BETTER_AUTH_SECRET: "test-only-secret-with-over-32-characters-long",
-  DB_HOST: "mysql.example", DB_PORT: "3306", DB_NAME: "test_database", DB_USER: "test_user", DB_PASSWORD: "synthetic-test-only",
+  DATABASE_URL: "postgresql://test_user:synthetic-test-only@ep-synthetic-pooler.example/test_database?sslmode=require&channel_binding=require",
+  DATABASE_URL_UNPOOLED: "postgresql://test_user:synthetic-test-only@ep-synthetic.example/test_database?sslmode=require&channel_binding=require",
   RESEND_API_KEY: "re_test_only_synthetic", EMAIL_FROM: "Vantix <accounts@example.test>",
 };
 export const envelope = {
@@ -11,19 +12,19 @@ export function memoryPool() {
   const rows = new Map();
   return {
     rows,
-    async execute(sql, parameters) {
-      if (sql.startsWith("SELECT")) return [[...(rows.has(parameters[0]) ? [structuredClone(rows.get(parameters[0]))] : [])]];
+    async query(sql, parameters) {
+      if (sql.startsWith("SELECT")) return { rows: rows.has(parameters[0]) ? [structuredClone(rows.get(parameters[0]))] : [], rowCount: rows.has(parameters[0]) ? 1 : 0 };
       if (sql.startsWith("INSERT")) {
         const [userId, value, revision, updatedAt] = parameters;
-        if (rows.has(userId)) throw Object.assign(new Error("synthetic duplicate"), { code: "ER_DUP_ENTRY" });
+        if (rows.has(userId)) return { rows: [], rowCount: 0 };
         rows.set(userId, { envelope: value, revision, updated_at: updatedAt });
-        return [{ affectedRows: 1 }];
+        return { rows: [{ revision }], rowCount: 1 };
       }
       const [value, revision, updatedAt, userId, expected] = parameters;
       const row = rows.get(userId);
-      if (!row || row.revision !== expected) return [{ affectedRows: 0 }];
+      if (!row || row.revision !== expected) return { rows: [], rowCount: 0 };
       rows.set(userId, { envelope: value, revision, updated_at: updatedAt });
-      return [{ affectedRows: 1 }];
+      return { rows: [{ revision }], rowCount: 1 };
     },
   };
 }

@@ -1,13 +1,15 @@
-import { createPool } from "mysql2/promise";
+import { createDatabasePool } from "./database.js";
+import { loadLocalEnvironment } from "./env.js";
 import { loadConfig } from "./config.js";
 import { authOptions, createAuth, createMailer } from "./auth.js";
 import { createApp } from "./app.js";
 import { createReadiness } from "./readiness.js";
 import { SyncRepository } from "./sync.js";
 
+loadLocalEnvironment();
 const config = loadConfig();
 // A public setup-mode service can start without secrets. Authentication never falls back.
-const pool = config.issues.length ? null : createPool(config.db);
+const pool = config.issues.length ? null : createDatabasePool(config.db);
 const mailer = createMailer(config);
 const auth = pool ? createAuth(config, pool, mailer) : null;
 const readiness = createReadiness(config, pool, authOptions(config, pool, mailer));

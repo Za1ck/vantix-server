@@ -22,31 +22,35 @@ export class SyncRepository {
   constructor(pool) { this.pool = pool; }
 
   async get(userId) {
-    const [rows] = await this.pool.execute("SELECT envelope, revision, updated_at FROM vantix_encrypted_vault WHERE user_id = ? LIMIT 1", [userId]);
+    const { rows } = await this.pool.query("SELECT envelope, revision, updated_at FROM public.vantix_encrypted_vault WHERE user_id = $1 LIMIT 1", [userId]);
     if (!rows.length) return { envelope: null, revision: 0 };
     const row = rows[0];
-    return { envelope: JSON.parse(row.envelope), revision: Number(row.revision), updatedAt: Number(row.updated_at) };
+    const revision = Number(row.revision);
+    const updatedAt = Number(row.updated_at);
+    const envelope = JSON.parse(row.envelope);
+    if (!Number.isSafeInteger(revision) || revision < 1 || !Number.isSafeInteger(updatedAt) || updatedAt < 0 || !validEnvelope(envelope)) throw new Error("Invalid stored encrypted vault");
+    return { envelope, revision, updatedAt };
   }
 
   async put(userId, envelope, expectedRevision) {
+    if (!validSyncPayload({ envelope, expectedRevision })) throw new Error("Invalid encrypted vault update");
     const revision = expectedRevision + 1;
     const updatedAt = Date.now();
     if (expectedRevision === 0) {
-      try {
-        await this.pool.execute("INSERT INTO vantix_encrypted_vault (user_id, envelope, revision, updated_at) VALUES (?, ?, ?, ?)", [userId, JSON.stringify(envelope), revision, updatedAt]);
-      } catch (error) { if (error.code === "ER_DUP_ENTRY") return null; throw error; }
+      const result = await this.pool.query("INSERT INTO public.vantix_encrypted_vault (user_id, envelope, revision, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING RETURNING revision", [userId, JSON.stringify(envelope), revision, updatedAt]);
+      if (result.rowCount !== 1) return null;
     } else {
-      const [result] = await this.pool.execute("UPDATE vantix_encrypted_vault SET envelope = ?, revision = ?, updated_at = ? WHERE user_id = ? AND revision = ?", [JSON.stringify(envelope), revision, updatedAt, userId, expectedRevision]);
-      if (result.affectedRows !== 1) return null;
+      const result = await this.pool.query("UPDATE public.vantix_encrypted_vault SET envelope = $1, revision = $2, updated_at = $3 WHERE user_id = $4 AND revision = $5 RETURNING revision", [JSON.stringify(envelope), revision, updatedAt, userId, expectedRevision]);
+      if (result.rowCount !== 1) return null;
     }
     return { revision, updatedAt };
   }
 }
 
-export const VAULT_DDL = `CREATE TABLE IF NOT EXISTS vantix_encrypted_vault (
-  user_id VARCHAR(36) NOT NULL PRIMARY KEY,
-  envelope MEDIUMTEXT NOT NULL,
-  revision BIGINT UNSIGNED NOT NULL,
-  updated_at BIGINT UNSIGNED NOT NULL,
-  CONSTRAINT vantix_vault_user_fk FOREIGN KEY (user_id) REFERENCES vantix_user(id) ON DELETE CASCADE
-) ENGINE=InnoDB`;
+export const VAULT_DDL = `CREATE TABLE IF NOT EXISTS public.vantix_encrypted_vault (
+  user_id UUID NOT NULL PRIMARY KEY,
+  envelope TEXT NOT NULL,
+  revision BIGINT NOT NULL CHECK (revision >= 1 AND revision <= 9007199254740991),
+  updated_at BIGINT NOT NULL CHECK (updated_at >= 0 AND updated_at <= 9007199254740991),
+  CONSTRAINT vantix_vault_user_fk FOREIGN KEY (user_id) REFERENCES public.vantix_user(id) ON DELETE CASCADE
+)`;

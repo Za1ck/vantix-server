@@ -1,4 +1,6 @@
 import { getMigrations } from "better-auth/db/migration";
+import { assertSecureConnection } from "./database.js";
+import { validateVaultSchema } from "./schema.js";
 
 export function createReadiness(config, pool, options) {
   let state = { ready: false, registrationEnabled: false, issues: [...config.issues, ...(!config.issues.length ? ["Databasen kontrolleres."] : [])] };
@@ -12,12 +14,14 @@ export function createReadiness(config, pool, options) {
       if (!issues.length) {
         let connection;
         try {
-          connection = await pool.getConnection();
-          const [tls] = await connection.query("SHOW SESSION STATUS LIKE 'Ssl_cipher'");
-          if (!tls[0]?.Value) throw new Error("TLS unavailable");
+          connection = await pool.connect();
+          await assertSecureConnection(connection);
+          const current = await connection.query("SELECT current_schema() AS schema");
+          if (current.rows[0]?.schema !== "public") throw new Error("Vantix schema must be public");
           const plan = await getMigrations(options);
           if (plan.toBeCreated.length || plan.toBeAdded.length || plan.toBeAddedIndexes.length || plan.unsafeChanges.length || plan.schemaProblems.length) issues.push("Databaseskemaet skal oprettes eller gennemgås med npm run db:plan.");
-          await connection.query("SELECT user_id, envelope, revision, updated_at FROM vantix_encrypted_vault LIMIT 0");
+          await validateVaultSchema(connection);
+          await connection.query("SELECT user_id, envelope, revision, updated_at FROM public.vantix_encrypted_vault LIMIT 0");
         } catch {
           issues.push("Sikker databaseforbindelse eller Vantix-skema er ikke klar. Kontrollér TLS, adgang og migration.");
         } finally { connection?.release(); }

@@ -1,3 +1,32 @@
+function databaseOptions(value, env, direct = false) {
+  try {
+    const url = new URL(value || "");
+    if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || !url.username || !url.password ||
+        !url.pathname.slice(1) || url.pathname.slice(1).includes("/") || url.hash ||
+        (url.port && (!Number.isInteger(Number(url.port)) || Number(url.port) < 1 || Number(url.port) > 65535)) ||
+        (direct && url.hostname.includes("-pooler"))) throw new Error();
+    // pg-connection-string can let URL query parameters override TLS and even host.
+    // Only the explicitly validated authority/database are used; policy stays here.
+    url.search = "";
+    return {
+      connectionString: url.toString(),
+      max: direct ? 2 : 5,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+      statement_timeout: 20_000,
+      query_timeout: 25_000,
+      application_name: direct ? "vantix-schema" : "vantix-account",
+      enableChannelBinding: true,
+      ssl: {
+        rejectUnauthorized: true,
+        servername: url.hostname,
+        minVersion: "TLSv1.2",
+        ...(env.POSTGRES_SSL_CA ? { ca: env.POSTGRES_SSL_CA.replace(/\\n/g, "\n") } : {}),
+      },
+    };
+  } catch { return null; }
+}
+
 export function loadConfig(env = process.env) {
   const issues = [];
   let origin = "";
@@ -8,31 +37,16 @@ export function loadConfig(env = process.env) {
   } catch { issues.push("BETTER_AUTH_URL skal være serverens præcise HTTPS-origin."); }
   const secret = env.BETTER_AUTH_SECRET || "";
   if (secret.length < 32) issues.push("BETTER_AUTH_SECRET mangler eller er for kort.");
-  const db = {
-    host: env.DB_HOST || "",
-    port: Number(env.DB_PORT || 3306),
-    user: env.DB_USER || "",
-    database: env.DB_NAME || "",
-    password: env.DB_PASSWORD || "",
-    timezone: "Z",
-    connectionLimit: 5,
-    connectTimeout: 10_000,
-    enableKeepAlive: true,
-    multipleStatements: false,
-    ssl: {
-      rejectUnauthorized: true,
-      verifyIdentity: true,
-      minVersion: "TLSv1.2",
-      ...(env.DB_SSL_CA ? { ca: env.DB_SSL_CA.replace(/\\n/g, "\n") } : {}),
-    },
-  };
-  if (!db.password) issues.push("DB_PASSWORD mangler.");
-  if (!db.host || !db.user || !Number.isInteger(db.port) || db.port < 1 || db.port > 65535 || !/^[a-zA-Z0-9_]+$/.test(db.database)) issues.push("DB_HOST, DB_PORT, DB_USER og DB_NAME skal være gyldige.");
+  const db = databaseOptions(env.DATABASE_URL, env);
+  const migrationDb = databaseOptions(env.DATABASE_URL_UNPOOLED, env, true);
+  const databaseIssues = db ? [] : ["DATABASE_URL skal være en gyldig PostgreSQL-forbindelse med bruger, adgangskode og databasenavn."];
+  const migrationIssues = migrationDb ? [] : ["DATABASE_URL_UNPOOLED skal være en gyldig direkte PostgreSQL-forbindelse uden -pooler i værtsnavnet."];
+  issues.push(...databaseIssues);
   const resendKey = env.RESEND_API_KEY || "";
   const emailFrom = env.EMAIL_FROM || "";
   if (!resendKey.startsWith("re_") || resendKey.length < 12) issues.push("RESEND_API_KEY mangler eller er ugyldig.");
   if (!emailFrom || /[\r\n]/.test(emailFrom) || !/[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+/.test(emailFrom)) issues.push("EMAIL_FROM skal være en godkendt afsenderadresse.");
   const port = Number(env.PORT || 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) issues.push("PORT er ugyldig.");
-  return { origin, secret, db, resendKey, emailFrom, port: Number.isInteger(port) ? port : 3000, registrationEnabled: env.REGISTRATION_ENABLED !== "false", issues };
+  return { origin, secret, db, migrationDb, databaseIssues, migrationIssues, resendKey, emailFrom, port: Number.isInteger(port) ? port : 3000, registrationEnabled: env.REGISTRATION_ENABLED !== "false", issues };
 }
